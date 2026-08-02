@@ -1,0 +1,217 @@
+{
+  "_": [
+    "Copy to your repo as store/cards.json and edit. This is the storyboard AND",
+    "the copy: what each card shows, where the phone sits, and what it says in",
+    "every language. Read by appkit's render/compose.swift.",
+    "",
+    "**1242x2688 is fixed.** Every iOS card here is that size and CI fails one",
+    "that is not: one display size means one set to review. Captures come off an",
+    "iPhone 17 Pro (1206x2622) and are composed onto it.",
+    "",
+    "The full schema is in appkit's docs/CARDS.md. This is a real set trimmed to",
+    "three cards, because a working example beats a blank schema."
+  ],
+  "card": {
+    "width": 1242,
+    "height": 2688
+  },
+  "locales": [
+    {
+      "capture": "en",
+      "out": "en-US"
+    },
+    {
+      "capture": "ja",
+      "out": "ja"
+    },
+    {
+      "capture": "zh-Hant",
+      "out": "zh-Hant"
+    },
+    {
+      "capture": "zh-Hans",
+      "out": "zh-Hans"
+    },
+    {
+      "capture": "ko",
+      "out": "ko"
+    }
+  ],
+  "fonts": {
+    "display": {
+      "family": "Poppins",
+      "files": {
+        "700": "Poppins-Bold.ttf"
+      },
+      "cjk": {
+        "ja": "HiraginoSans-W6",
+        "zh-Hant": "PingFangTC-Semibold",
+        "zh-Hans": "PingFangSC-Semibold",
+        "ko": "AppleSDGothicNeo-Bold"
+      }
+    }
+  },
+  "defaultDevice": "iphone",
+  "devices": {
+    "iphone": {
+      "aspect": 0.4891,
+      "radius": 0.113,
+      "bezel": 0.0533,
+      "color": "#1B1B20",
+      "rim": "#4A4A52",
+      "shadow": 0.05
+    }
+  },
+  "cards": [
+    {
+      "name": "hero-translation",
+      "span": "hero",
+      "background": {
+        "color": "#131226"
+      },
+      "device": {
+        "scene": "translation",
+        "at": 56,
+        "x": 35,
+        "zoom": 80,
+        "rotate": -8,
+        "layer": 2
+      },
+      "extraDevices": [
+        {
+          "scene": "readingEditor",
+          "at": 56,
+          "x": 63,
+          "zoom": 80,
+          "rotate": 15,
+          "layer": 1
+        }
+      ],
+      "elements": [
+        {
+          "image": "store/art/icon.png",
+          "x": 43.5,
+          "y": 4,
+          "width": 13,
+          "height": 6,
+          "radius": 2.8
+        }
+      ],
+      "caption": {
+        "at": 16,
+        "lines": [
+          {
+            "text": {
+              "en": "Every lyric,",
+              "ja": "どんな歌詞も",
+              "zh-Hant": "每一句歌詞",
+              "zh-Hans": "每一句歌词",
+              "ko": "어떤 가사도,"
+            },
+            "size": 104,
+            "color": "#FFFFFF",
+            "lineHeight": 1.05
+          },
+          {
+            "text": {
+              "en": "with furigana.",
+              "ja": "ふりがな付き。",
+              "zh-Hant": "都有振假名。",
+              "zh-Hans": "都有振假名。",
+              "ko": "후리가나와 함께."
+            },
+            "size": 104,
+            "color": "#9ED89E",
+            "lineHeight": 1.05
+          }
+        ]
+      }
+    },
+    {
+      "name": "hero-word-card",
+      "span": "hero",
+      "background": {
+        "color": "#131226"
+      },
+      "elements": [
+        {
+          "image": "store/art/icon.png",
+          "x": 43.5,
+          "y": 4,
+          "width": 13,
+          "height": 6,
+          "radius": 2.8
+        }
+      ],
+      "caption": {
+        "at": 16,
+        "lines": [
+          {
+            "text": {
+              "en": "Learn the meaning",
+              "ja": "どんな言葉も",
+              "zh-Hant": "每個單字的意思",
+              "zh-Hans": "每个单词的意思",
+              "ko": "어떤 단어든"
+            },
+            "size": 104,
+            "color": "#FFFFFF",
+            "lineHeight": 1.05
+          },
+          {
+            "text": {
+              "en": "of every word.",
+              "ja": "意味まで学べる。",
+              "zh-Hant": "一看就懂。",
+              "zh-Hans": "一看就懂。",
+              "ko": "의미까지 이해."
+            },
+            "size": 104,
+            "color": "#E8C36A",
+            "lineHeight": 1.05
+          }
+        ]
+      }
+    },
+    {
+      "name": "trending",
+      "background": {
+        "color": "#232048"
+      },
+      "device": {
+        "scene": "trending",
+        "at": 40,
+        "zoom": 82
+      },
+      "caption": {
+        "at": 84,
+        "lines": [
+          {
+            "text": {
+              "en": "See what's",
+              "ja": "いま人気の曲が",
+              "zh-Hant": "看看大家",
+              "zh-Hans": "看看大家",
+              "ko": "요즘 인기 곡을"
+            },
+            "size": 96,
+            "color": "#FFFFFF",
+            "lineHeight": 1.05
+          },
+          {
+            "text": {
+              "en": "trending.",
+              "ja": "ひと目でわかる。",
+              "zh-Hant": "都在唱什麼。",
+              "zh-Hans": "都在唱什么。",
+              "ko": "한눈에."
+            },
+            "size": 96,
+            "color": "#9ED89E",
+            "lineHeight": 1.05
+          }
+        ]
+      }
+    }
+  ]
+}
