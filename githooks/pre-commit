@@ -1,0 +1,88 @@
+#!/bin/sh
+set -e
+
+# Copied into each app repo as .githooks/pre-commit by `appkit sync`, which also
+# points git at it (core.hooksPath).
+#
+# The fixers run every time rather than trusting anyone to remember: Xcode has
+# no swiftformat of its own, and the .md and .mjs under scripts/ are files no
+# editor integration necessarily covers.
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+# STAGED FILES ONLY, and this is the whole point. Formatting the working tree —
+# `swiftformat $SOURCE_DIRS`, which is what one of these repos used to do —
+# rewrites files the author deliberately left out of the commit, so a commit
+# that touches one script silently reformats somebody's half-finished feature.
+# A commit may only ever change what it is committing.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+swift_files=$(printf '%s\n' "$staged" | grep -E '\.swift$' || true)
+# .gitignore'd paths are already excluded: git never stages them.
+prettier_files=$(printf '%s\n' "$staged" |
+  grep -E '\.(md|json|jsonc|js|mjs|cjs|ts|tsx|yml|yaml|css|html)$' || true)
+
+# A missing formatter is only a problem for a commit that has files it would
+# have touched. An Android repo has no Swift in it, and demanding swiftformat
+# there was how the kit read as iOS-only from the inside.
+needs() {
+  command -v "$1" >/dev/null || {
+    echo "pre-commit: $1 not found — brew install $1" >&2
+    exit 1
+  }
+}
+
+if [ -n "$swift_files" ]; then
+  needs swiftformat
+  # shellcheck disable=SC2086
+  swiftformat $swift_files
+fi
+
+if [ -n "$prettier_files" ]; then
+  needs prettier
+  # appkit's own files are COPIES here, and prettier settles some of them
+  # differently from how appkit ships them — a reformat would then read as
+  # drift and fail doctor on the next commit. They are formatted in appkit.
+  for f in $prettier_files; do
+    case "$f" in
+      AGENTS.core.md | .claude/skills/*) ;;
+      *) printf '%s\n' "$f" ;;
+    esac
+  done | tr '\n' '\0' | xargs -0 -r prettier --write --log-level warn || true
+fi
+
+# Not guarded on appkit being present: a repo that cannot check its own wiring
+# should say so rather than commit quietly. The old guard was `-x .kit/bin/kit`,
+# which stopped matching the moment the submodule left and took the check with
+# it in silence.
+if command -v appkit >/dev/null; then
+  appkit doctor --quiet || {
+    echo "pre-commit: appkit doctor failed — run 'appkit doctor' to see why" >&2
+    exit 1
+  }
+else
+  echo "pre-commit: appkit not found — brew install appkit (skipping doctor)" >&2
+fi
+
+# Whatever else this repo wants run on a commit — eslint, a schema check, a
+# generated file. It gets the staged list on stdin, and it runs LAST, after the
+# shared formatters, so it sees the files as they will be committed.
+if [ -x .githooks/local ]; then
+  printf '%s\n' "$staged" | .githooks/local || {
+    echo "pre-commit: .githooks/local failed" >&2
+    exit 1
+  }
+fi
+
+# -f, because a tracked file may also match .gitignore — a repo's own, or the
+# user's global one — and `git add` on a NAMED ignored path exits 1 and prints
+# the ignored DIRECTORY rather than the file, which under set -e killed the
+# commit with a message naming a path nobody typed. Forcing stages nothing the
+# author didn't: every name here came out of git diff --cached.
+printf '%s\n' "$staged" | while IFS= read -r f; do
+  [ -e "$f" ] && git add -f -- "$f"
+done
+
+exit 0

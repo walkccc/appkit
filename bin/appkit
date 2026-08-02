@@ -1,0 +1,393 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================================
+# appkit — one program for every app repo here.
+#
+#   appkit new ios        scaffold a repo, from nothing
+#   appkit sync           write this repo's shared files (harness, configs, tokens)
+#   appkit doctor         verify all of it (the pre-commit hook runs this)
+#   appkit run            build, install, launch
+#   appkit release        capture the scenes and compose the cards
+#   appkit publish copy   the listing text
+#   appkit publish shots  the store cards
+#   appkit ship           the binary: an AAB onto a track, an archive onto Connect
+#   appkit version 1.3.0  move the version everywhere it is written
+#
+# What the repo declares is appkit.json; what a scene is, is scripts/scenes.sh;
+# how its cards look is store/cards.json. Everything else is here.
+#
+# The shared files are COPIED into each repo and checked by doctor, not linked:
+# a link into /opt/homebrew survives neither another machine nor an upgrade, and
+# a repo should still read as itself with appkit uninstalled. `appkit sync` is
+# how an upgrade reaches a repo.
+# ============================================================================
+
+# Where the payload lives — resolved through the executable's own path, because
+# brew installs bin/appkit as a symlink into the cellar and the render tools,
+# configs and skills sit beside it there.
+KIT_DIR="$(cd "$(dirname "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/.." && pwd)"
+export KIT_DIR
+
+# The repo is found by walking up for appkit.json, the way git looks for .git — so
+# every command works from any subdirectory, and none of them needs to know
+# where appkit itself is installed.
+find_root() {
+  local dir="$PWD"
+  while [[ "$dir" != "/" ]]; do
+    [[ -f "$dir/appkit.json" ]] && {
+      printf '%s' "$dir"
+      return 0
+    }
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+ROOT_DIR="${ROOT_DIR:-$(find_root || true)}"
+export ROOT_DIR
+# shellcheck source=../lib/log.sh
+. "$KIT_DIR/lib/log.sh"
+
+QUIET=false
+FAILED=0
+
+ok() { [[ "$QUIET" == true ]] || printf '  \033[32m✓\033[0m %s\n' "$*"; }
+bad() {
+  FAILED=$((FAILED + 1))
+  printf '  \033[31m✗\033[0m %s\n' "$*" >&2
+}
+
+# The one file set that is copied rather than linked, and where it lands.
+# Elevation is deliberately NOT here: one app's is a no-op flat ladder that
+# reads its own Palette, which is a brand decision and not a shared token.
+#
+# Which of them an app takes is the app's call (tokens.files in appkit.json). One
+# repo here holds its Tokens/ to a strict contract — one Swift value per CSS
+# token from the web board it shares a design with — and an Opacity ladder with
+# no CSS counterpart would break that. Scale is fine there because its spacing
+# already *is* the web's Tailwind ladder.
+TOKENS_DEFAULT=(Scale.swift Opacity.swift)
+
+GITIGNORE_OPEN='# === appkit base (managed) ==='
+GITIGNORE_CLOSE='# === end appkit base ==='
+
+load_manifest() {
+  # shellcheck source=../lib/manifest.sh
+  . "$KIT_DIR/lib/manifest.sh"
+  # An Android repo has no Swift token ladder at all, so the array is
+  # not merely empty — it is unset, and `set -u` treats those differently.
+  if [[ -n "${KIT_TOKENS+set}" ]] && ((${#KIT_TOKENS[@]})); then
+    TOKENS=()
+    for name in "${KIT_TOKENS[@]}"; do TOKENS+=("$name.swift"); done
+  else
+    TOKENS=("${TOKENS_DEFAULT[@]}")
+  fi
+}
+
+# --- the shared files -------------------------------------------------------
+#
+# repo path  ->  path inside appkit's payload. Copied, and doctor fails on any
+# difference: a copy is the only form that survives an upgrade, another
+# machine, and a clone by someone who has never heard of appkit.
+#
+# So an upgrade is `brew upgrade appkit` and then `appkit sync` in each repo,
+# which is one command per repo and shows up as a reviewable diff.
+files() {
+  cat <<'FILES'
+.prettierrc|config/.prettierrc
+.githooks/pre-commit|githooks/pre-commit
+AGENTS.core.md|AGENTS.core.md
+.claude/skills/release/SKILL.md|skills/release/SKILL.md
+.claude/skills/screenshots/SKILL.md|skills/screenshots/SKILL.md
+.claude/skills/scaffold/SKILL.md|skills/scaffold/SKILL.md
+.claude/skills/copy/SKILL.md|skills/copy/SKILL.md
+FILES
+  [[ "${PLATFORM:-}" == "ios" ]] && printf '%s\n' '.swiftformat|config/.swiftformat'
+  return 0
+}
+
+# A file the repo declined in appkit.json's sync.skip. Reported by doctor rather
+# than silently absent, because "this repo owns that file" is a decision and
+# should read like one.
+declined() {
+  local path="$1" skipped
+  for skipped in "${SYNC_SKIP[@]:-}"; do
+    [[ "$skipped" == "$path" ]] && return 0
+  done
+  return 1
+}
+
+sync_files() {
+  local path source
+  while IFS='|' read -r path source; do
+    [[ -n "$path" ]] || continue
+    declined "$path" && continue
+    mkdir -p "$ROOT_DIR/$(dirname "$path")"
+    # Replace a symlink rather than writing through it into the payload.
+    [[ -L "$ROOT_DIR/$path" ]] && rm -f "$ROOT_DIR/$path"
+    if [[ ! -f "$ROOT_DIR/$path" ]] || ! cmp -s "$KIT_DIR/$source" "$ROOT_DIR/$path"; then
+      cp "$KIT_DIR/$source" "$ROOT_DIR/$path"
+      log "wrote $path"
+    fi
+  done < <(files | sort -u)
+  prune_skills
+}
+
+# Skills appkit no longer ships. Leaving one behind is worse than a stale file:
+# an agent reads it and runs a command that is gone. `.claude/skills/` is
+# appkit's whole directory — that is the contract in AGENTS.core.md — so
+# anything there appkit does not ship is debris.
+#
+# The shipped list is read ONCE into a variable rather than piped per name:
+# `files | grep -q` returns non-zero under `set -o pipefail` even on a match,
+# because grep leaves as soon as it has one and the cat behind it takes SIGPIPE.
+# That read as "appkit ships none of these" and deleted every skill.
+stale_skills() {
+  local dir name shipped
+  [[ -d "$ROOT_DIR/.claude/skills" ]] || return 0
+  shipped="$(files)"
+  for dir in "$ROOT_DIR"/.claude/skills/*/; do
+    [[ -d "$dir" ]] || continue
+    name="$(basename "$dir")"
+    [[ "$shipped" == *".claude/skills/$name/SKILL.md|"* ]] || printf '%s\n' "$name"
+  done
+}
+
+prune_skills() {
+  local name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    rm -rf "${ROOT_DIR:?}/.claude/skills/$name"
+    log "removed .claude/skills/$name (appkit no longer ships it)"
+  done < <(stale_skills)
+}
+
+check_files() {
+  local path source
+  while IFS='|' read -r path source; do
+    [[ -n "$path" ]] || continue
+    if declined "$path"; then
+      ok "$path (this repo's own — declined in appkit.json)"
+      continue
+    fi
+    if [[ -L "$ROOT_DIR/$path" ]]; then
+      bad "$path is a symlink, not appkit's copy (run: appkit sync)"
+    elif [[ ! -f "$ROOT_DIR/$path" ]]; then
+      bad "$path is missing (run: appkit sync)"
+    elif ! cmp -s "$KIT_DIR/$source" "$ROOT_DIR/$path"; then
+      bad "$path differs from appkit $(appkit_version) — edit it in appkit, then sync"
+    else
+      ok "$path"
+    fi
+  done < <(files | sort -u)
+  local stale
+  while IFS= read -r stale; do
+    [[ -n "$stale" ]] || continue
+    bad ".claude/skills/$stale is not appkit's any more (run: appkit sync)"
+  done < <(stale_skills)
+}
+
+# --- the version this repo asks for -----------------------------------------
+#
+# A repo says which appkit it was set up against. A floor, not a pin: the whole
+# point of one install is that every repo moves together.
+appkit_version() { cat "$KIT_DIR/VERSION"; }
+
+check_version() {
+  local want="${KIT_VERSION:-}" have
+  have="$(appkit_version)"
+  [[ -n "$want" ]] || {
+    ok "appkit $have (appkit.json names no floor)"
+    return
+  }
+  # Sorted with -V: the lower of (want, have) sorts first, so the floor holds
+  # unless it sorts second and differs.
+  if [[ "$want" == "$have" ]] || [[ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -1)" == "$want" ]]; then
+    ok "appkit $have (appkit.json asks for $want or newer)"
+  else
+    bad "appkit $have is older than the $want this repo asks for — brew upgrade appkit"
+  fi
+}
+
+# --- .gitignore -------------------------------------------------------------
+
+managed_block() { cat "$KIT_DIR/config/gitignore.base"; }
+
+repo_block() {
+  # Everything below the closing marker is the repo's own and is never touched.
+  local file="$ROOT_DIR/.gitignore" close
+  [[ -f "$file" ]] || return 0
+  if grep -qF "$GITIGNORE_CLOSE" "$file"; then
+    sed -n "/$(sed 's/[]\/$*.^[]/\\&/g' <<<"$GITIGNORE_CLOSE")/,\$p" "$file" | tail -n +2
+    return 0
+  fi
+  # First run: keep what is already there, below the managed block.
+  printf '\n# --- %s ---\n' "$APP_NAME"
+  cat "$file"
+}
+
+sync_gitignore() {
+  local tmp
+  tmp="$(mktemp)"
+  {
+    managed_block
+    repo_block
+  } >"$tmp"
+  if [[ -f "$ROOT_DIR/.gitignore" ]] && cmp -s "$tmp" "$ROOT_DIR/.gitignore"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  mv "$tmp" "$ROOT_DIR/.gitignore"
+  log "wrote .gitignore (managed block + this repo's own rules)"
+}
+
+check_gitignore() {
+  local file="$ROOT_DIR/.gitignore" have want
+  [[ -f "$file" ]] || {
+    bad ".gitignore is missing"
+    return
+  }
+  if [[ -L "$file" ]]; then
+    bad ".gitignore is a symlink — git refuses to follow one and applies NO rules"
+    return
+  fi
+  grep -qF "$GITIGNORE_OPEN" "$file" || {
+    bad ".gitignore has no appkit managed block (run: appkit sync)"
+    return
+  }
+  have="$(sed -n "/$(sed 's/[]\/$*.^[]/\\&/g' <<<"$GITIGNORE_OPEN")/,/$(sed 's/[]\/$*.^[]/\\&/g' <<<"$GITIGNORE_CLOSE")/p" "$file")"
+  want="$(managed_block)"
+  if [[ "$have" == "$want" ]]; then
+    ok ".gitignore managed block"
+  else
+    bad ".gitignore managed block has drifted (run: appkit sync)"
+  fi
+}
+
+# --- Swift token scales -----------------------------------------------------
+
+sync_tokens() {
+  local name src dst
+  [[ -n "${TOKENS_DIR:-}" ]] || return 0
+  mkdir -p "$ROOT_DIR/$TOKENS_DIR"
+  for name in "${TOKENS[@]}"; do
+    src="$KIT_DIR/swift/$name"
+    dst="$ROOT_DIR/$TOKENS_DIR/$name"
+    if [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
+      cp "$src" "$dst"
+      log "wrote $TOKENS_DIR/$name"
+    fi
+  done
+}
+
+check_tokens() {
+  local name src dst
+  [[ -n "${TOKENS_DIR:-}" ]] || return 0
+  for name in "${TOKENS[@]}"; do
+    src="$KIT_DIR/swift/$name"
+    dst="$ROOT_DIR/$TOKENS_DIR/$name"
+    if [[ ! -f "$dst" ]]; then
+      bad "$TOKENS_DIR/$name is missing (run: appkit sync)"
+    elif ! cmp -s "$src" "$dst"; then
+      bad "$TOKENS_DIR/$name differs from the kit — edit appkit's swift/$name, then sync"
+    else
+      ok "$TOKENS_DIR/$name"
+    fi
+  done
+}
+
+# --- local git config -------------------------------------------------------
+#
+# One setting, and what it stops: without core.hooksPath the formatters never
+# run.
+CONFIG='core.hooksPath|.githooks'
+
+sync_git_config() {
+  local key want
+  while IFS='|' read -r key want; do
+    [[ "$(git -C "$ROOT_DIR" config "$key" || true)" == "$want" ]] && continue
+    git -C "$ROOT_DIR" config "$key" "$want"
+    log "set $key to $want"
+  done <<<"$CONFIG"
+}
+
+check_git_config() {
+  local key want have
+  # Local config, so a fresh CI clone cannot have it and its absence there means
+  # nothing. What CI checks instead is the OUTPUT of the hook — that the
+  # formatters left nothing to do.
+  if [[ -n "${CI:-}" ]]; then
+    ok "local git config (skipped: none on CI)"
+    return
+  fi
+  while IFS='|' read -r key want; do
+    have="$(git -C "$ROOT_DIR" config "$key" || true)"
+    if [[ "$have" == "$want" ]]; then
+      ok "$key"
+    else
+      bad "$key is '${have:-unset}', want '$want' (run: appkit sync)"
+    fi
+  done <<<"$CONFIG"
+}
+
+# --- commands ---------------------------------------------------------------
+
+cmd_sync() {
+  load_manifest
+  sync_files
+  sync_gitignore
+  sync_tokens
+  sync_git_config
+  log "appkit sync: $APP_NAME ($PLATFORM) is on appkit $(appkit_version)"
+}
+
+cmd_doctor() {
+  load_manifest
+  [[ "$QUIET" == true ]] || log "appkit doctor: $APP_NAME ($PLATFORM)"
+  check_version
+  check_files
+  check_gitignore
+  check_tokens
+  check_git_config
+  if ((FAILED)); then
+    printf 'appkit doctor: %d problem(s)\n' "$FAILED" >&2
+    exit 1
+  fi
+  [[ "$QUIET" == true ]] || log "all good"
+}
+
+# Capture, then compose, and stop. Uploading is `appkit publish shots`, said out
+# loud: staging is what almost every run wants — the cards are tracked and the
+# diff is the review — and an upload that rode along on the common path is the
+# one outward-facing step nobody chose.
+cmd_release() {
+  "$KIT_DIR/commands/capture.sh" "$@"
+  "$KIT_DIR/commands/render.sh"
+  log "Staged. Review with: git status -- store/screenshots"
+  log "  then: appkit publish shots"
+}
+
+command="${1:-doctor}"
+shift || true
+
+case "$command" in
+  sync)
+    for arg in "$@"; do [[ "$arg" == "--quiet" ]] && QUIET=true; done
+    cmd_sync
+    ;;
+  doctor)
+    for arg in "$@"; do [[ "$arg" == "--quiet" ]] && QUIET=true; done
+    cmd_doctor
+    ;;
+  run) exec "$KIT_DIR/commands/run.sh" "$@" ;;
+  capture) exec "$KIT_DIR/commands/capture.sh" "$@" ;;
+  render) exec "$KIT_DIR/commands/render.sh" "$@" ;;
+  copy) exec "$KIT_DIR/commands/copy.sh" "$@" ;;
+  publish) exec "$KIT_DIR/commands/publish.sh" "$@" ;;
+  ship) exec "$KIT_DIR/commands/publish.sh" build "$@" ;;
+  version) exec "$KIT_DIR/commands/version.sh" "$@" ;;
+  new) exec "$KIT_DIR/commands/new.sh" "$@" ;;
+  release) cmd_release "$@" ;;
+  -h | --help | --version) sed -n '5,16p' "$0"; printf '\nappkit %s\n' "$(appkit_version)" ;;
+  *) die "unknown command: $command (see: appkit --help)" ;;
+esac

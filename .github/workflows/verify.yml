@@ -1,0 +1,170 @@
+# Reusable: is this repo still wired to appkit, and is it still formatted?
+#
+# Called from an app repo:
+#
+#   jobs:
+#     verify:
+#       uses: walkccc/appkit/.github/workflows/verify.yml@v1
+#
+# Deliberately does NOT build. Building is minutes of a runner per push for
+# something the IDE has already done on the machine that made the commit, and
+# the failures it catches are the ones a compile catches locally first. What CI
+# is for here is the class of mistake a person cannot see: a copied file that
+# drifted from appkit, a formatter that never ran, a caption that exists in four
+# languages out of five.
+name: verify
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: ubuntu-latest
+
+jobs:
+  # Needs no appkit: the manifest and the storyboard are the repo's own, and
+  # what is worth asserting about them is that they agree with each other.
+  storyboard:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the storyboard parses, and every card speaks every language
+        run: |
+          python3 - <<'CHECK'
+          import json, sys
+
+          manifest = json.load(open("appkit.json"))
+          cards_path = (manifest.get("render") or {}).get("cards")
+          if not cards_path:
+              print("this repo draws its own cards; nothing to check")
+              sys.exit(0)
+
+          board = json.load(open(cards_path))
+          languages = {row["capture"] for row in board["locales"]}
+          problems = []
+          for card in board["cards"]:
+              for line in (card.get("caption") or {}).get("lines", []):
+                  text = line["text"]
+                  if isinstance(text, str) or "default" in text:
+                      continue
+                  missing = languages - set(text)
+                  if missing:
+                      problems.append(
+                          f"{card['name']}: no copy for {', '.join(sorted(missing))}")
+
+          # Two files, two lists of languages. They have to be the same list.
+          declared = {row["capture"] for row in manifest["locales"]}
+          if declared != languages:
+              problems.append(
+                  f"appkit.json has {sorted(declared)}, {cards_path} has {sorted(languages)}")
+
+          # A card is a file on a store listing. Two with one name is one card.
+          names = [card["name"] for card in board["cards"]]
+          if len(names) != len(set(names)):
+              problems.append("two cards share a name")
+
+          # One display size, everywhere, forever. Two shapes means two sets to
+          # review and two ways for a card to be subtly wrong.
+          if manifest.get("platform") == "ios":
+              card = board["card"]
+              if (card["width"], card["height"]) != (1242, 2688):
+                  problems.append(
+                      f"card is {card['width']}x{card['height']}; iOS cards are 1242x2688")
+              for extra in board["cards"]:
+                  size = extra.get("size")
+                  # A sized card is deliberate — a watch capture, a feature
+                  # graphic — but it has to be one of the sizes a store knows.
+                  if size and (size["width"], size["height"]) not in {
+                      (1242, 2688), (416, 496), (1024, 500), (512, 512),
+                  }:
+                      problems.append(
+                          f"{extra['name']}: {size['width']}x{size['height']} is not a store size")
+
+          for problem in problems:
+              print(f"  {problem}", file=sys.stderr)
+          print(f"{len(board['cards'])} cards x {len(board['locales'])} locales")
+          sys.exit(1 if problems else 0)
+          CHECK
+
+      - name: the listing copy is within every store's limits
+        run: |
+          python3 - <<'CHECK'
+          import json, pathlib, sys
+
+          manifest = json.load(open("appkit.json"))
+          root = pathlib.Path((manifest.get("store") or {}).get("metadata", "store/metadata"))
+          if not root.is_dir():
+              print("no tracked listing copy")
+              sys.exit(0)
+
+          stores = set()
+          for row in manifest["locales"]:
+              stores.update(key for key in ("appStore", "play") if row.get(key))
+
+          APP_STORE = {"name": 30, "subtitle": 30, "keywords": 100,
+                       "promotionalText": 170, "description": 4000, "whatsNew": 4000}
+          PLAY = {"name": 30, "shortDescription": 80, "description": 4000, "whatsNew": 500}
+          limits = {}
+          for store in stores:
+              for field, limit in (APP_STORE if store == "appStore" else PLAY).items():
+                  # The tighter of the two, for an app on both.
+                  limits[field] = min(limit, limits.get(field, limit))
+
+          problems, counted = [], 0
+          for path in sorted(root.rglob("*.json")):
+              for field, value in json.loads(path.read_text()).items():
+                  if not value or field.startswith("_"):
+                      continue
+                  counted += 1
+                  limit = limits.get(field)
+                  # Characters, never bytes: every CJK locale fails a byte check
+                  # that en-US passes.
+                  if limit and len(value) > limit:
+                      problems.append(f"{path.stem}/{field}: {len(value)} > {limit}")
+                  if field == "keywords" and ", " in value:
+                      problems.append(
+                          f"{path.stem}/keywords: a space after a comma is an indexed character")
+
+          for problem in problems:
+              print(f"  {problem}", file=sys.stderr)
+          print(f"checked {counted} filled field(s) for: {', '.join(sorted(stores))}")
+          sys.exit(1 if problems else 0)
+          CHECK
+
+  # appkit is checked out rather than brew-installed: a Linux runner would spend
+  # minutes on Homebrew to run one shell script. The ref is this workflow's own
+  # tag, so the checks and the files they compare against are the same version.
+  wiring:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: walkccc/appkit
+          ref: v1
+          path: .appkit
+
+      - name: appkit doctor
+        run: .appkit/bin/appkit doctor
+
+  # Its own job, because the checkout above would otherwise put appkit's markdown
+  # under the glob and this would be checking appkit's formatting, not the app's.
+  formatting:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The formatters run in the pre-commit hook, so this is not "format the
+      # repo" — it is "prove the hook ran". A diff here means somebody committed
+      # with --no-verify, or without core.hooksPath set.
+      - name: prettier left nothing to do
+        run: |
+          # Both ignore files: .gitignore so that pipeline scratch (.asc/,
+          # .play/) is skipped the way it is locally, .prettierignore for what
+          # is tracked but generated or vendored.
+          npx --yes prettier@3 --check \
+            "**/*.{md,json,yml,yaml,js,mjs,ts,tsx,css,html}" \
+            --ignore-path .gitignore --ignore-path .prettierignore \
+            --ignore-unknown

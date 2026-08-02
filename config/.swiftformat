@@ -1,0 +1,52 @@
+# The house Swift format, shared by every app repo through a symlink at its
+# root. swiftformat resolves a symlinked config transparently, so there is one
+# copy of this file and no drift.
+#
+# Flag names are the modern hyphenated form; --min-version is what makes that
+# safe, since the old spellings were what the repos used before they converged.
+
+# --- General ---
+
+--swift-version 6.0
+--language-mode 6
+--min-version 0.58.7
+
+# --- Indentation & Layout ---
+
+--indent 2
+--maxwidth 100
+--tabwidth 2
+--trim-whitespace always
+--insertlines enabled
+--linebreaks lf
+
+# --- Standard Rules ---
+
+--allman false
+--else-position same-line
+--empty-braces no-space
+--semicolons never
+--trailing-commas always
+
+# --- Organization & Naming ---
+
+--import-grouping alpha
+--strip-unused-args always
+--property-types explicit
+
+# `always` also strips `async` from non-test code that doesn't await — correct
+# far more often than not, but a silent behaviour change in a repo nobody is
+# building right now. tests-only can only ever reduce the edit.
+--redundant-async tests-only
+
+# --- Math & Literals ---
+
+--binarygrouping 4,4
+--decimalgrouping 3,3
+--hexgrouping 4,4
+--ranges spaced
+
+# --- Comments ---
+
+--comments indent
+--doc-comments preserve

@@ -1,0 +1,38 @@
+# A STARTING POINT, copied by hand, not linked by `kit sync`.
+#
+# It is the one shared config that is deliberately not enforced. Linking it
+# overwrote an Android repo's Kotlin indent and dropped its ktlint rules — the
+# same shape of mistake as a shared Spacing.swift, and the same answer: what an
+# editor does to a repo's own language is that repo's, and only the parts every
+# repo agrees on are worth sharing. Take what you want from this and own the
+# rest.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 100
+
+[*.{kt,kts}]
+indent_size = 4
+ij_kotlin_allow_trailing_comma = true
+ij_kotlin_allow_trailing_comma_on_call_site = true
+
+[*.{java,gradle}]
+indent_size = 4
+
+[*.swift]
+indent_size = 2
+
+[*.md]
+# Prettier wraps prose at 80; trailing spaces are a line break in Markdown and
+# the only place they are not a mistake.
+trim_trailing_whitespace = false
+max_line_length = 80
+
+[Makefile]
+indent_style = tab

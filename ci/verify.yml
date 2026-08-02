@@ -1,0 +1,22 @@
+# Copy this into an app repo as .github/workflows/verify.yml.
+#
+# It is copied because GitHub Actions only reads workflows from a repo's own
+# .github/workflows, and only the body of a REUSABLE workflow can live elsewhere
+# — which is exactly what this calls. Four lines here, and everything they do is
+# in appkit.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # So a run can be re-tried by hand after a fix that is in the kit rather than
+  # in this repo — a reusable workflow changes without the caller changing.
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # A moving major tag, not @main: v1 moves for a fix and stops at a change
+    # that makes an app repo do something, so a break is opted into by writing
+    # @v2. The tag also picks which appkit the checks compare this repo against.
+    uses: walkccc/appkit/.github/workflows/verify.yml@v1
