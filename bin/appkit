@@ -1,0 +1,498 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================================
+# appkit — one program for every app repo here.
+#
+#   appkit help                what any of these do (appkit help VERB for one)
+#   appkit new ios             scaffold a repo, from nothing
+#   appkit sync                write this repo's shared files
+#   appkit doctor              check they stayed put (the pre-commit hook does)
+#   appkit skills              link the skills into ~/.claude/skills, once
+#   appkit path                where appkit is installed, for a repo's scripts
+#   appkit run                 build, install, launch
+#   appkit capture             photograph the store scenes, one launch each
+#   appkit render              compose them into store cards
+#   appkit make screenshots    capture + render, and stop
+#   appkit review screenshots  every card in one picture, changes framed
+#   appkit check metadata      every store's limits, every language's coverage
+#   appkit pull metadata       what the listing says right now, to compare
+#   appkit upload metadata     the listing text, onto the store
+#   appkit upload screenshots  the store cards, onto the store
+#   appkit ship                the binary, onto the store
+#   appkit version 1.3.0       move the version everywhere it is written
+#   appkit version build       the build number only, +1
+#
+# What the repo declares is appkit.json; what a scene is, is scripts/scenes.sh;
+# how its cards look is store/cards.json. Everything else is here.
+# ============================================================================
+
+# Where the payload lives — resolved through the executable's own path, because
+# brew installs bin/appkit as a symlink into the cellar and the render tools,
+# configs and skills sit beside it there.
+KIT_DIR="$(cd "$(dirname "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/.." && pwd)"
+export KIT_DIR
+
+# The repo is found by walking up for appkit.json, the way git looks for .git — so
+# every command works from any subdirectory, and none of them needs to know
+# where appkit itself is installed.
+find_root() {
+  local dir="$PWD"
+  while [[ "$dir" != "/" ]]; do
+    [[ -f "$dir/appkit.json" ]] && {
+      printf '%s' "$dir"
+      return 0
+    }
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+ROOT_DIR="${ROOT_DIR:-$(find_root || true)}"
+export ROOT_DIR
+# shellcheck source=../lib/log.sh
+. "$KIT_DIR/lib/log.sh"
+
+QUIET=false
+FAILED=0
+
+ok() { [[ "$QUIET" == true ]] || printf '  \033[32m✓\033[0m %s\n' "$*"; }
+bad() {
+  FAILED=$((FAILED + 1))
+  printf '  \033[31m✗\033[0m %s\n' "$*" >&2
+}
+
+GITIGNORE_OPEN='# === appkit base (managed) ==='
+GITIGNORE_CLOSE='# === end appkit base ==='
+
+load_manifest() {
+  # shellcheck source=../lib/manifest.sh
+  . "$KIT_DIR/lib/manifest.sh"
+  # Both of the commands in this file ask the platform something — which shared
+  # files it adds, which phone it captures on — so the adapter is loaded here
+  # rather than on demand. Neither adapter needs its toolchain present to be
+  # SOURCED: android.sh leaves ADB empty when adb is missing and only dies on a
+  # function that would have used it, so `appkit doctor` still runs on a machine
+  # with no Android SDK.
+  use_platform
+}
+
+# --- the shared files -------------------------------------------------------
+#
+# repo path  ->  path inside appkit's payload. Copied, and doctor fails on any
+# difference: a copy is the only form that survives an upgrade, another
+# machine, and a clone by someone who has never heard of appkit.
+#
+# So an upgrade is `brew upgrade appkit` and then `appkit sync` in each repo,
+# which is one command per repo and shows up as a reviewable diff.
+#
+# The skills are deliberately NOT in here. They are the same instructions in
+# every repo and only an agent on this laptop ever reads them, so they live once
+# in ~/.claude/skills as links into this install: `appkit skills`.
+#
+# The rows every repo takes, then whatever the platform adds — `.swiftformat` on
+# iOS, nothing on Android. Asked of the adapter rather than branched on here,
+# because "which shared files does this platform need" is a question with a
+# platform-shaped answer and those all live in platform/.
+files() {
+  cat <<'FILES'
+.prettierrc|config/.prettierrc
+.githooks/pre-commit|githooks/pre-commit
+AGENTS.core.md|AGENTS.core.md
+FILES
+  platform_shared_files
+}
+
+# A file the repo declined in appkit.json's sync.skip. Reported by doctor rather
+# than silently absent, because "this repo owns that file" is a decision and
+# should read like one.
+declined() {
+  local path="$1" skipped
+  for skipped in "${SYNC_SKIP[@]:-}"; do
+    [[ "$skipped" == "$path" ]] && return 0
+  done
+  return 1
+}
+
+sync_files() {
+  local path source
+  while IFS='|' read -r path source; do
+    [[ -n "$path" ]] || continue
+    declined "$path" && continue
+    mkdir -p "$ROOT_DIR/$(dirname "$path")"
+    # Replace a symlink rather than writing through it into the payload.
+    [[ -L "$ROOT_DIR/$path" ]] && rm -f "$ROOT_DIR/$path"
+    if [[ ! -f "$ROOT_DIR/$path" ]] || ! cmp -s "$KIT_DIR/$source" "$ROOT_DIR/$path"; then
+      cp "$KIT_DIR/$source" "$ROOT_DIR/$path"
+      log "wrote $path"
+    fi
+  done < <(files | sort -u)
+}
+
+check_files() {
+  local path source
+  while IFS='|' read -r path source; do
+    [[ -n "$path" ]] || continue
+    if declined "$path"; then
+      ok "$path (this repo's own — declined in appkit.json)"
+      continue
+    fi
+    if [[ -L "$ROOT_DIR/$path" ]]; then
+      bad "$path is a symlink, not appkit's copy (run: appkit sync)"
+    elif [[ ! -f "$ROOT_DIR/$path" ]]; then
+      bad "$path is missing (run: appkit sync)"
+    elif ! cmp -s "$KIT_DIR/$source" "$ROOT_DIR/$path"; then
+      bad "$path differs from appkit $(appkit_version) — edit it in appkit, then sync"
+    else
+      ok "$path"
+    fi
+  done < <(files | sort -u)
+}
+
+# --- the version this repo asks for -----------------------------------------
+#
+# A repo says which appkit it was set up against. A floor, not a pin: the whole
+# point of one install is that every repo moves together.
+appkit_version() { cat "$KIT_DIR/VERSION"; }
+
+check_version() {
+  local want="${KIT_VERSION:-}" have
+  have="$(appkit_version)"
+  [[ -n "$want" ]] || {
+    ok "appkit $have (appkit.json names no floor)"
+    return
+  }
+  # Sorted with -V: the lower of (want, have) sorts first, so the floor holds
+  # unless it sorts second and differs.
+  if [[ "$want" == "$have" ]] || [[ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -1)" == "$want" ]]; then
+    ok "appkit $have (appkit.json asks for $want or newer)"
+  else
+    bad "appkit $have is older than the $want this repo asks for — brew upgrade appkit"
+  fi
+}
+
+# --- .gitignore -------------------------------------------------------------
+
+managed_block() { cat "$KIT_DIR/config/gitignore.base"; }
+
+repo_block() {
+  # Everything below the closing marker is the repo's own and is never touched.
+  local file="$ROOT_DIR/.gitignore" close
+  [[ -f "$file" ]] || return 0
+  if grep -qF "$GITIGNORE_CLOSE" "$file"; then
+    sed -n "/$(sed 's/[]\/$*.^[]/\\&/g' <<<"$GITIGNORE_CLOSE")/,\$p" "$file" | tail -n +2
+    return 0
+  fi
+  # First run: keep what is already there, below the managed block.
+  printf '\n# --- %s ---\n' "$APP_NAME"
+  cat "$file"
+}
+
+sync_gitignore() {
+  local tmp
+  tmp="$(mktemp)"
+  {
+    managed_block
+    repo_block
+  } >"$tmp"
+  if [[ -f "$ROOT_DIR/.gitignore" ]] && cmp -s "$tmp" "$ROOT_DIR/.gitignore"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  mv "$tmp" "$ROOT_DIR/.gitignore"
+  log "wrote .gitignore (managed block + this repo's own rules)"
+}
+
+check_gitignore() {
+  local file="$ROOT_DIR/.gitignore" have want
+  [[ -f "$file" ]] || {
+    bad ".gitignore is missing"
+    return
+  }
+  if [[ -L "$file" ]]; then
+    bad ".gitignore is a symlink — git refuses to follow one and applies NO rules"
+    return
+  fi
+  grep -qF "$GITIGNORE_OPEN" "$file" || {
+    bad ".gitignore has no appkit managed block (run: appkit sync)"
+    return
+  }
+  have="$(sed -n "/$(sed 's/[]\/$*.^[]/\\&/g' <<<"$GITIGNORE_OPEN")/,/$(sed 's/[]\/$*.^[]/\\&/g' <<<"$GITIGNORE_CLOSE")/p" "$file")"
+  want="$(managed_block)"
+  if [[ "$have" == "$want" ]]; then
+    ok ".gitignore managed block"
+  else
+    bad ".gitignore managed block has drifted (run: appkit sync)"
+  fi
+}
+
+# --- the phone, and the sizes it files under --------------------------------
+#
+# Which phone this repo's captures come off. Read from the PLATFORM, never from
+# appkit.json: the model is the kit's to pin so that every repo moves off it at
+# once, and a per-repo key would be six places to drift instead of one — which
+# is the shape of a bug this kit has already had. Reported here because it is
+# otherwise invisible from inside an app repo: nothing you can grep tells you
+# which phone your own store cards come from.
+#
+# Moving to a new model is one line in platform/<name>.sh and a brew upgrade.
+check_capture_device() {
+  local model="${CAPTURE_DEVICE_TYPE:-}"
+  if [[ -n "$model" ]]; then
+    model="${model##*.}"
+    ok "captures come off ${model//-/ } (appkit pins it)"
+  else
+    # Android: an emulator is a VM the machine has one of, not something the
+    # kit conjures, so there is no model to pin and nothing to check.
+    ok "$PLATFORM pins no capture device"
+  fi
+}
+
+# What App Store Connect accepts at each display type, from `asc screenshots
+# sizes --all` — portrait only, since a transpose is matched below. Embedded
+# rather than asked for at run time: doctor runs inside the pre-commit hook and
+# asc is only needed to publish, and a check that skips itself on the machines
+# without asc is not a check.
+DISPLAY_SIZES=$(
+  cat <<'SIZES'
+IPHONE_35 640x960
+IPHONE_40 640x1136
+IPHONE_47 750x1334
+IPHONE_55 1242x2208
+IPHONE_58 1080x2340 1125x2436 1170x2532
+IPHONE_61 1179x2556 1206x2622
+IPHONE_65 1242x2688 1284x2778
+IPHONE_67 1260x2736 1290x2796 1320x2868
+IPHONE_69 1260x2736 1290x2796 1320x2868
+IPAD_97 1536x2048
+IPAD_105 1668x2224
+IPAD_PRO_129 2048x2732 2064x2752
+IPAD_PRO_3GEN_11 1488x2266 1640x2360 1668x2388 1668x2420
+IPAD_PRO_3GEN_129 2048x2732 2064x2752
+WATCH_SERIES_3 312x390
+WATCH_SERIES_4 368x448
+WATCH_SERIES_7 396x484
+WATCH_SERIES_10 416x496
+WATCH_ULTRA 410x502 422x514
+APPLE_TV 1920x1080 3840x2160
+APPLE_VISION_PRO 3840x2160
+DESKTOP 1280x800 1440x900 2560x1600 2880x1800
+SIZES
+)
+
+# Every size the storyboard draws a card at must have a declared display type
+# that ACCEPTS it. `asc screenshots upload --device-type` is a FILTER — "only
+# files matching --device-type are uploaded" — so a set whose pixels match none
+# of the declared types uploads ZERO files and reports success. That has already
+# shipped here: two repos scaffolded IPHONE_69 beside a 1242x2688 storyboard,
+# a size only IPHONE_65 takes.
+CARD_SIZE_CHECK=$(
+  cat <<'CHECK'
+import json, pathlib, sys
+
+storyboard, table, declared_raw, shown = sys.argv[1:5]
+
+accepts = {}
+for row in table.splitlines():
+    name, *sizes = row.split()
+    accepts[name] = {tuple(int(n) for n in size.split("x")) for size in sizes}
+
+# The manifest spells them short (IPHONE_65); asc's own table prefixes the
+# family (APP_IPHONE_65). Both mean the row above.
+declared = [t.removeprefix("APP_") for t in declared_raw.split() if t]
+if not declared:
+    print("bad appkit.json declares no ios.deviceTypes — nothing would upload")
+    sys.exit()
+
+cards = json.loads(pathlib.Path(storyboard).read_text())
+base = cards.get("card") or {}
+# Every distinct canvas in the file: the base, plus any card that overrides it
+# (a watch card, Play's feature graphic, a store icon).
+wanted = {}
+for size, who in [((base.get("width"), base.get("height")), "cards")] + [
+    ((c["size"].get("width"), c["size"].get("height")), c.get("name", "?"))
+    for c in cards.get("cards") or [] if c.get("size")
+]:
+    if None not in size:
+        wanted.setdefault(size, []).append(who)
+
+for (width, height), who in sorted(wanted.items()):
+    # A landscape card is the same display type as its portrait transpose.
+    fits = sorted(
+        name for name, sizes in accepts.items()
+        if (width, height) in sizes or (height, width) in sizes
+    )
+    label = f"{width}x{height}"
+    matched = [name for name in fits if name in declared]
+    if matched:
+        print(f"ok {shown} {label} files under {matched[0]}")
+    elif fits:
+        print(
+            f"bad {shown} draws {label}, which only {'/'.join(fits)} accepts — "
+            f"appkit.json declares {', '.join(declared)}, so asc would upload "
+            f"none of these ({', '.join(sorted(set(who)))})"
+        )
+    else:
+        # Play's feature graphic and store icon are real cards at sizes no
+        # Apple display type has. Not a problem, and not this check's business.
+        print(f"ok {shown} {label} is not an App Store size ({who[0]})")
+CHECK
+)
+
+check_card_sizes() {
+  # Not on the App Store, or drawing its own cards: nothing here to compare.
+  [[ -n "${ASC_APP_ID:-}" ]] || return 0
+  [[ -n "${CARDS_FILE:-}" && -f "$ROOT_DIR/$CARDS_FILE" ]] || return 0
+
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      ok\ *) ok "${line#ok }" ;;
+      bad\ *) bad "${line#bad }" ;;
+    esac
+  done < <(python3 -c "$CARD_SIZE_CHECK" \
+    "$ROOT_DIR/$CARDS_FILE" "$DISPLAY_SIZES" "${DEVICE_TYPES[*]:-}" "$CARDS_FILE")
+}
+
+# --- local git config -------------------------------------------------------
+#
+# One setting, and what it stops: without core.hooksPath the formatters never
+# run.
+CONFIG='core.hooksPath|.githooks'
+
+sync_git_config() {
+  local key want
+  while IFS='|' read -r key want; do
+    [[ "$(git -C "$ROOT_DIR" config "$key" || true)" == "$want" ]] && continue
+    git -C "$ROOT_DIR" config "$key" "$want"
+    log "set $key to $want"
+  done <<<"$CONFIG"
+}
+
+check_git_config() {
+  local key want have
+  # Local config, so a fresh CI clone cannot have it and its absence there means
+  # nothing. What CI checks instead is the OUTPUT of the hook — that the
+  # formatters left nothing to do.
+  if [[ -n "${CI:-}" ]]; then
+    ok "local git config (skipped: none on CI)"
+    return
+  fi
+  while IFS='|' read -r key want; do
+    have="$(git -C "$ROOT_DIR" config "$key" || true)"
+    if [[ "$have" == "$want" ]]; then
+      ok "$key"
+    else
+      bad "$key is '${have:-unset}', want '$want' (run: appkit sync)"
+    fi
+  done <<<"$CONFIG"
+}
+
+# --- commands ---------------------------------------------------------------
+
+cmd_sync() {
+  load_manifest
+  sync_files
+  sync_gitignore
+  sync_git_config
+  log "appkit sync: $APP_NAME ($PLATFORM) is on appkit $(appkit_version)"
+}
+
+cmd_doctor() {
+  load_manifest
+  [[ "$QUIET" == true ]] || log "appkit doctor: $APP_NAME ($PLATFORM)"
+  check_version
+  check_files
+  check_gitignore
+  check_git_config
+  check_capture_device
+  check_card_sizes
+  if ((FAILED)); then
+    printf 'appkit doctor: %d problem(s)\n' "$FAILED" >&2
+    exit 1
+  fi
+  [[ "$QUIET" == true ]] || log "all good"
+}
+
+# Capture, then compose, and stop. Uploading is `appkit upload screenshots`,
+# said out loud: staging is what almost every run wants — the cards are tracked
+# and the diff is the review — and an upload that rode along on the common path
+# is the one outward-facing step nobody chose.
+cmd_make() {
+  local what="${1:-screenshots}"
+  shift || true
+  case "$what" in
+    screenshots) ;;
+    help | -h | --help) usage; return 0 ;;
+    *) die "appkit make takes: screenshots" ;;
+  esac
+  # Asked for help on the pass-through half: capture would print it and exit 0,
+  # and render would then run against a set that is not there.
+  for arg in "$@"; do
+    case "$arg" in help | -h | --help) exec "$KIT_DIR/commands/capture.sh" help ;; esac
+  done
+  "$KIT_DIR/commands/capture.sh" "$@"
+  "$KIT_DIR/commands/render.sh"
+  log "Staged. Review with: appkit review screenshots"
+  log "  then: appkit upload screenshots"
+}
+
+usage() { kit_usage "$0"; }
+
+# Where appkit is installed. The answer to "how does a repo's own script find
+# the kit" — a repo script that needs a platform function sources
+# "$(appkit path)/lib/manifest.sh".
+#
+# Scripts the kit itself calls (scripts/scenes.sh, and whatever post_capture
+# runs) do not need it: KIT_DIR is already exported into them.
+cmd_path() { printf '%s\n' "$KIT_DIR"; }
+
+# One verb's own header, read straight out of the file that owns it rather than
+# by running it: help has to answer outside an app repo, and every command
+# starts by demanding an appkit.json.
+cmd_help() {
+  local for_verb="${1:-}"
+  case "$for_verb" in
+    "") usage; printf '\nappkit %s\n' "$(appkit_version)" ;;
+    run | capture | render | review | version | skills | new) kit_usage "$KIT_DIR/commands/$for_verb.sh" ;;
+    check | pull | metadata) kit_usage "$KIT_DIR/commands/metadata.sh" ;;
+    upload | ship) kit_usage "$KIT_DIR/commands/upload.sh" ;;
+    make | sync | doctor | help | path) usage ;;
+    *) die "no such command: $for_verb (see: appkit help)" ;;
+  esac
+}
+
+command="${1:-help}"
+shift || true
+
+case "$command" in
+  sync)
+    for arg in "$@"; do [[ "$arg" == "--quiet" ]] && QUIET=true; done
+    cmd_sync
+    ;;
+  doctor)
+    for arg in "$@"; do [[ "$arg" == "--quiet" ]] && QUIET=true; done
+    cmd_doctor
+    ;;
+  path) cmd_path ;;
+  skills) exec "$KIT_DIR/commands/skills.sh" "$@" ;;
+  run) exec "$KIT_DIR/commands/run.sh" "$@" ;;
+  capture) exec "$KIT_DIR/commands/capture.sh" "$@" ;;
+  render) exec "$KIT_DIR/commands/render.sh" "$@" ;;
+  review) exec "$KIT_DIR/commands/review.sh" "$@" ;;
+  make) cmd_make "$@" ;;
+  # One verb, one object, and the object is always spelled out: `appkit check
+  # metadata`, never `appkit check`. The script that owns the subject reads the
+  # verb as its first argument.
+  check | pull) exec "$KIT_DIR/commands/metadata.sh" "$command" "$@" ;;
+  upload) exec "$KIT_DIR/commands/upload.sh" "$@" ;;
+  ship) exec "$KIT_DIR/commands/upload.sh" build "$@" ;;
+  version | -v | --version) exec "$KIT_DIR/commands/version.sh" "$@" ;;
+  new) exec "$KIT_DIR/commands/new.sh" "$@" ;;
+  help | -h | --help) cmd_help "$@" ;;
+  # The names that moved. A dead name that errors with the live one costs less
+  # than the same name meaning something else next year.
+  publish) die "renamed: appkit upload metadata, appkit upload screenshots, appkit ship" ;;
+  copy) die "renamed: appkit check metadata (also: appkit pull metadata)" ;;
+  release) die "renamed: appkit make screenshots" ;;
+  *) die "unknown command: $command (see: appkit help)" ;;
+esac
