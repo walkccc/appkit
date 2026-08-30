@@ -31,7 +31,9 @@
 # And the watch, which is iOS's alone — `ios_*`, not `platform_*`, the same way
 # ios_project and ios_bundle_id are. Android has no counterpart to define as a
 # no-op: Wear OS is a different shape and nothing here ships one. No appkit
-# command calls these, so there is no platform to branch on either.
+# command calls these either: `appkit run` reaches them because
+# platform_use_device sets DEVICE_KIND=watch, so the branch stays in the adapter
+# and no command learns there is a watch.
 #
 #   ios_watch_resolve           WATCH_UDID from ios.watch.device
 #   ios_watch_locate_app        WATCH_APP + WATCH_BUNDLE_ID from the build
@@ -213,7 +215,9 @@ platform_install() {
   fi
   quiet xcrun simctl bootstatus "$device" -b
   quiet xcrun simctl install "$device" "$APP"
-  _ios_clear_foreground "$device"
+  # watchOS has no status bar to carry another app's breadcrumb, and no
+  # launchctl to ask for one.
+  [[ "${DEVICE_KIND:-simulator}" == watch ]] || _ios_clear_foreground "$device"
 }
 
 # …and, for a capture, pin everything the status bar would otherwise date the
@@ -255,9 +259,9 @@ platform_list_devices() {
     sed 's/ (Shutdown)//'
 }
 
-# The device this run targets, by name or UDID, physical or simulated. Sets
-# DEVICE_ID and DEVICE_KIND; everything downstream branches on the kind rather
-# than guessing from the name.
+# The device this run targets, by name or UDID: physical, simulated, or a watch.
+# Sets DEVICE_ID and DEVICE_KIND; everything downstream branches on the kind
+# rather than guessing from the name.
 platform_use_device() {
   local wanted="$1" udid
   udid="$(xcrun devicectl list devices 2>/dev/null | python3 -c '
@@ -286,6 +290,17 @@ for line in sys.stdin.read().splitlines()[2:]:
   [[ -n "${UDID:-}" ]] || die "no device or simulator named '$wanted' — run: appkit run"
   DEVICE_ID="$UDID"
   DEVICE_KIND=simulator
+
+  # A watch is a third kind and not a simulator with an unusual name: it takes
+  # the watch scheme, the watchOS SDK and its own bundle id. Resolved as an
+  # ordinary simulator it built the phone scheme against `platform=iOS
+  # Simulator` holding a watch UDID, and xcodebuild's answer — "no available
+  # devices matched" — named the device rather than the mistake.
+  if [[ "$DEVICE_TYPE" == *Apple-Watch* ]]; then
+    ios_watch_require
+    DEVICE_KIND=watch
+    WATCH_UDID="$DEVICE_ID"
+  fi
 }
 
 platform_launch() {
@@ -340,8 +355,6 @@ platform_retire() {
 ios_watch_require() {
   [[ -n "${WATCH_SCHEME:-}" ]] ||
     die "appkit.json declares no ios.watch.scheme — this app has no watch app"
-  [[ -n "${WATCH_DEVICE:-}" ]] ||
-    die "appkit.json declares no ios.watch.device (e.g. \"Apple Watch Series 11 (46mm)\")"
 }
 
 # By NAME, unlike the phone. A watch model is a real choice — the card size it
@@ -350,6 +363,10 @@ ios_watch_require() {
 # expect 46mm is the same silent size mismatch the phone pass is pinned against.
 ios_watch_resolve() {
   ios_watch_require
+  # Only this path needs the model: `appkit run --device` was told which watch,
+  # and a repo whose watch is never captured owes the manifest no name.
+  [[ -n "${WATCH_DEVICE:-}" ]] ||
+    die "appkit.json declares no ios.watch.device (e.g. \"Apple Watch Series 11 (46mm)\")"
   local udid runtime kind
   IFS=$'\t' read -r udid runtime kind < <(_ios_resolve_device "$WATCH_DEVICE") || true
   [[ -n "${udid:-}" ]] || die "no simulator named '$WATCH_DEVICE'
@@ -516,6 +533,15 @@ ios_bundle_id() {
 platform_locate_app() {
   local candidate stamp newest=0 newest_source dir
   APP=""
+  # The watch app is another SDK's build product under another bundle id, and
+  # ios_watch_locate_app already knows both.
+  if [[ "${DEVICE_KIND:-simulator}" == watch ]]; then
+    ios_watch_locate_app
+    APP="$WATCH_APP"
+    BUNDLE_ID="$WATCH_BUNDLE_ID"
+    log "Using $APP"
+    return
+  fi
   local sdk="iphonesimulator"
   [[ "${DEVICE_KIND:-simulator}" == physical ]] && sdk="iphoneos"
   while IFS= read -r candidate; do
@@ -574,18 +600,21 @@ platform_verify_languages() {
 # Every app repo forbids running this from an agent; it exists for the release
 # capture the user has explicitly asked for, and --skip-build is the usual path.
 platform_build() {
-  local logfile project destination
+  local logfile project destination scheme="$SCHEME"
   project="${PROJECT:-$(ios_project)}"
-  if [[ "${DEVICE_KIND:-simulator}" == physical ]]; then
-    destination="platform=iOS,id=$DEVICE_ID"
-  else
-    destination="platform=iOS Simulator,id=${DEVICE_ID:-$UDID}"
-  fi
-  log "Building $SCHEME"
+  case "${DEVICE_KIND:-simulator}" in
+    physical) destination="platform=iOS,id=$DEVICE_ID" ;;
+    watch)
+      scheme="$WATCH_SCHEME"
+      destination="platform=watchOS Simulator,id=$DEVICE_ID"
+      ;;
+    *) destination="platform=iOS Simulator,id=${DEVICE_ID:-$UDID}" ;;
+  esac
+  log "Building $scheme"
   logfile="$(mktemp -t appkit-build)"
   if ! xcodebuild \
     -project "$project" \
-    -scheme "$SCHEME" \
+    -scheme "$scheme" \
     -configuration "$CONFIGURATION" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
     -destination "$destination" \

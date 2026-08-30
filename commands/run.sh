@@ -7,6 +7,7 @@ set -euo pipefail
 #   appkit run                            list the devices and stop
 #   appkit run --device "Jay's iPhone"    build, install, launch there
 #   appkit run --device "iPhone 17 Pro"   a simulator is a device too
+#   appkit run --device "Apple Watch …"   and so is a watch: runs the watch app
 #   appkit run --skip-build               use whatever is already built
 #
 # The device is always named. It is not read from appkit.json and there is no
@@ -15,6 +16,10 @@ set -euo pipefail
 #
 # Physical devices and simulators are one list. On iOS that means devicectl and
 # simctl both, which is the difference between seeing your iPhone here and not.
+#
+# Naming a watch simulator runs the watch app — a different scheme, SDK and
+# bundle id, all of them appkit.json's ios.watch. Nothing in this file says so:
+# the adapter answers with a third device kind and every step below follows it.
 #
 # NOTE: this builds. Every app repo forbids an agent from running it.
 # ============================================================================
