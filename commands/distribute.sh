@@ -44,5 +44,8 @@ done
 # the directory the flag was typed in.
 [[ -z "$DIST_DIR" || "$DIST_DIR" == /* ]] || DIST_DIR="$PWD/$DIST_DIR"
 
-use_platform
+# macOS, on a repo that has it. A download outside a store is a Mac shape and
+# nothing else here has one; a repo that is only on iOS still loads iOS, so the
+# refusal it gets is its own adapter saying `appkit ship`.
+prefer_platform macos
 platform_distribute

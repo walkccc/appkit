@@ -253,6 +253,28 @@ platform_list_all_devices() {
   done
 }
 
+# The adapter for a verb that belongs to one platform.
+#
+# `appkit distribute` is a Mac verb: a download that arrives carrying Apple's
+# verdict, which no store is involved in. On a repo that is on two platforms the
+# primary may well be the phone, and loading the phone for this would answer
+# with the phone's refusal — correct on a repo that only has a phone, and beside
+# the point on one that has both.
+#
+# Falls back to the primary rather than refusing, so a repo that genuinely is
+# not on the wanted platform still gets its own adapter's explanation. "This
+# repo is not on macos" answers a question nobody asked.
+prefer_platform() {
+  local wanted="$1" name
+  for name in "${PLATFORMS[@]:-$PLATFORM}"; do
+    if [[ "$name" == "$wanted" ]]; then
+      use_platform "$wanted"
+      return
+    fi
+  done
+  use_platform
+}
+
 choose_platform() {
   local wanted="${1:-}" name
   if [[ -z "$wanted" ]]; then
