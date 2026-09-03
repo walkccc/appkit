@@ -46,12 +46,21 @@ def put_list(name, values):
     out.append(f"{name}=({' '.join(shlex.quote(str(v)) for v in values)})")
 
 
+# One repo, one platform, until a product ships on two of them out of one tree.
+# `platform` takes a list for that case and the FIRST is the primary: it is what
+# doctor, sync and capture answer to, and what a command uses when nothing on the
+# command line says otherwise.
 platform = manifest.get("platform", "ios")
+platforms = platform if isinstance(platform, list) else [platform]
+if not platforms:
+    raise SystemExit("appkit.json: platform is an empty list")
+platform = platforms[0]
 # The oldest appkit that can run this repo. A floor, not a pin: doctor fails
 # below it and says nothing above it.
 put("APPKIT_VERSION", manifest.get("appkit"))
 put("APP_NAME", manifest["name"])
 put("PLATFORM", platform)
+put_list("PLATFORMS", platforms)
 put("BUNDLE_ID", manifest.get("bundleId"))
 put_list("SOURCE_DIRS", manifest.get("sources") or [manifest["name"]])
 
@@ -103,6 +112,13 @@ put("WATCH_BUNDLE_ID", watch.get("bundleId"))
 # icon, the resources beside it — is appkit's to build rather than the
 # toolchain's to hand over.
 macos = manifest.get("macos") or {}
+# An Xcode project instead of a SwiftPM package. Declaring it changes which of
+# the two things platform_build does: xcodebuild hands over a finished .app, so
+# none of the assembly keys below apply and appkit does not go looking for them.
+# A repo whose iOS app already needs an .xcodeproj gets its Mac app out of the
+# same one rather than keeping a second build system for the same sources.
+put("MACOS_PROJECT", macos.get("project"))
+put("MACOS_SCHEME", macos.get("scheme") or manifest["name"])
 # The SwiftPM product to build. Defaults to the app name and is separate from
 # it because a product may be lowercase where the app is not.
 put("MACOS_PRODUCT", macos.get("product") or manifest["name"])
@@ -188,4 +204,66 @@ use_platform() {
   [[ -f "$APPKIT_DIR/platform/$name.sh" ]] || die "no platform adapter for '$name'"
   # shellcheck disable=SC1090
   . "$APPKIT_DIR/platform/$name.sh"
+}
+
+# The adapter a command was asked for, checked against what the repo says it is.
+#
+# An empty name is the repo's primary, which is every repo that ships on one
+# platform and therefore nearly all of them. Naming one it does not declare is
+# an error rather than a load: platform/macos.sh exists in every install, and
+# sourcing it in an Android repo would answer questions about a Mac app that is
+# not there.
+# Which of this repo's platforms owns the device somebody named.
+#
+# A device name already says which machine it is: nobody has a MacBook and an
+# iPhone answering to the same one. So a repo on two platforms needs no second
+# flag to repeat it — every adapter is asked, and the first that recognises the
+# name is the one loaded for real.
+#
+# The asking happens in a SUBSHELL. Sourcing an adapter defines the whole
+# platform_* contract over whatever was there before, so a probe that ran in
+# this shell would leave the last one asked loaded rather than the one that
+# said yes. platform_use_device is a pure resolve on both — it looks a name up
+# and dies if it is not there, and boots nothing — which is what makes it safe
+# to call speculatively.
+platform_for_device() {
+  local wanted="$1" name
+  for name in "${PLATFORMS[@]:-$PLATFORM}"; do
+    if (
+      use_platform "$name"
+      platform_use_device "$wanted"
+    ) >/dev/null 2>&1; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Every device this repo could install to, whichever platform it is on. One
+# list, because "which device" is a question about the machine in front of you
+# and the answer does not come in two halves.
+platform_list_all_devices() {
+  local name
+  for name in "${PLATFORMS[@]:-$PLATFORM}"; do
+    (
+      use_platform "$name"
+      platform_list_devices
+    )
+  done
+}
+
+choose_platform() {
+  local wanted="${1:-}" name
+  if [[ -z "$wanted" ]]; then
+    use_platform
+    return
+  fi
+  for name in "${PLATFORMS[@]:-$PLATFORM}"; do
+    if [[ "$name" == "$wanted" ]]; then
+      use_platform "$wanted"
+      return
+    fi
+  done
+  die "appkit.json does not say this repo is on '$wanted' — it declares: ${PLATFORMS[*]:-$PLATFORM}"
 }

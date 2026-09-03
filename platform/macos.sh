@@ -27,11 +27,28 @@
 # shellcheck source=../lib/pictures.sh
 . "$APPKIT_DIR/lib/pictures.sh"
 
-# Where the assembled bundle lands. Under build/, which the managed .gitignore
-# block already covers, and NOT at the repo root: one of the two scripts this
-# replaced wrote Yap.app beside Package.swift, which meant a stray .app in
-# `git status` and one more line in that repo's own ignore file.
-MACOS_APP="${MACOS_APP:-$ROOT_DIR/build/$APP_NAME.app}"
+# Xcode configuration names are capitalised where SwiftPM's are not, and
+# macos.configuration is written in SwiftPM's spelling because that is what it
+# has always meant. One place converts.
+macos_xcode_config() {
+  local config="${MACOS_CONFIG:-release}"
+  printf '%s%s\n' "$(printf '%s' "${config:0:1}" | tr '[:lower:]' '[:upper:]')" "${config:1}"
+}
+
+# Where the bundle is. Two answers, because there are two ways to get one.
+#
+# Assembled by appkit under build/ when this repo is a SwiftPM package — not at
+# the repo root: one of the two scripts this replaced wrote Yap.app beside
+# Package.swift, which meant a stray .app in `git status` and one more line in
+# that repo's own ignore file.
+#
+# Handed over finished by Xcode when macos.project is declared, in the same
+# DerivedData every other Xcode build in this repo uses.
+if [[ -n "${MACOS_PROJECT:-}" ]]; then
+  MACOS_APP="${MACOS_APP:-$DERIVED_DATA_PATH/Build/Products/$(macos_xcode_config)/$APP_NAME.app}"
+else
+  MACOS_APP="${MACOS_APP:-$ROOT_DIR/build/$APP_NAME.app}"
+fi
 
 # The one self-signed certificate appkit makes, shared by every Mac app on it.
 # Shared because the designated requirement it produces is per-app anyway — the
@@ -201,6 +218,44 @@ macos_arch_args() {
 }
 
 platform_build() {
+  if [[ -n "${MACOS_PROJECT:-}" ]]; then
+    macos_xcodebuild
+    return
+  fi
+  macos_swiftpm_build
+}
+
+# The Xcode half. Nothing to assemble: xcodebuild produces the whole bundle —
+# Info.plist, icon, resources, signature — the way it does on iOS, which is the
+# entire reason a repo would declare macos.project rather than keep a second
+# build system for sources its iOS targets already compile.
+#
+# The signature it applies is this machine's. Distribution wants Developer ID
+# with a timestamp and the hardened runtime, so macos_sign runs over the top for
+# that one case, exactly as macos_assemble does on the other path.
+macos_xcodebuild() {
+  local logfile config
+  config="$(macos_xcode_config)"
+  log "Building $MACOS_SCHEME ($config)"
+  logfile="$(mktemp -t appkit-build)"
+  if ! xcodebuild \
+    -project "$ROOT_DIR/$MACOS_PROJECT" \
+    -scheme "$MACOS_SCHEME" \
+    -configuration "$config" \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
+    -destination 'platform=macOS' \
+    -allowProvisioningUpdates \
+    build >"$logfile" 2>&1; then
+    tail -40 "$logfile" >&2
+    rm -f "$logfile"
+    die "build failed"
+  fi
+  rm -f "$logfile"
+  [[ "${MACOS_DISTRIBUTING:-false}" == true ]] && macos_sign
+  return 0
+}
+
+macos_swiftpm_build() {
   local logfile
   macos_arch_args
   log "Building $MACOS_PRODUCT ($MACOS_CONFIG${MACOS_ARCH_ARGS+, universal})"
