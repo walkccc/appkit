@@ -129,7 +129,9 @@ Prefer `scene`. A widget render and a phone capture are both things the app was 
 
 Measure the window off the PNG once. `radiusX` and `radiusY` resolve against the frame's width and height separately, so 6/6 on a phone is an ellipse — deliberately, because that is the squircle.
 
-A `frame` with a `/` is resolved against **the repo**, like every other image in a storyboard — `store/art/iphone-17-pro.png` is a repo's own PNG, for a bezel no other app on appkit ships. A bare filename instead resolves against appkit's own `render/bezels/` — `iphone-17-pro-blue.png` and `apple-watch-s11-42mm-silver-forest.png` are photographed once, pinned in appkit the way the capture device itself is, so no repo keeps a copy or writes a path to reach one.
+A `frame` with a `/` is resolved against **the repo**, like every other image in a storyboard — `store/art/iphone-17-pro.png` is a repo's own PNG, for a bezel no other app on appkit ships. A bare filename instead resolves against appkit's own `render/bezels/` — `iphone-17-pro-blue.png`, `iphone-18-pro-burgundy.png` and `apple-watch-s11-42mm-silver-forest.png` are photographed once, pinned in appkit the way the capture device itself is, so no repo keeps a copy or writes a path to reach one.
+
+`iphone-18-pro-burgundy.png` is Screeny's bezel, rendered over a magenta screen and keyed out — the same phone a repo that frames its previews in Screeny shows there. Its window is `left 5.394, top 2.517, width 89.212, height 94.965`, measured off the magenta; 6/6 still fits.
 
 The Apple Watch model leaves the band off deliberately: a band is a second material, a second colour choice and a second asset, and the card is about what is on the screen.
 
