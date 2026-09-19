@@ -242,11 +242,12 @@ platform_prepare() {
 
 # Physical devices AND simulators, in one list, because "which device" does not
 # mean two different questions to the person asking. simctl cannot see a phone
-# on a cable and devicectl cannot see a simulator, so both are asked.
+# on a cable, so both are asked — and devicectl now lists simulators as well,
+# which the physical section drops by its Reality column.
 platform_list_devices() {
   local physical
   physical="$(xcrun devicectl list devices 2>/dev/null |
-    awk 'NR > 2 && NF { print }' || true)"
+    awk 'NR > 2 && NF && $NF != "simulated" { print }' || true)"
   if [[ -n "$physical" ]]; then
     printf '  physical:\n'
     printf '%s\n' "$physical" | sed 's/^/    /'
@@ -273,6 +274,10 @@ import json, sys
 
 wanted = sys.argv[1]
 for device in json.load(sys.stdin)["result"]["devices"]:
+    # devicectl lists simulators too now; one taken as physical is built
+    # against `platform=iOS` and xcodebuild finds no such device.
+    if device["hardwareProperties"].get("reality") == "simulated":
+        continue
     udid = device["hardwareProperties"].get("udid") or device["identifier"]
     if wanted in (device["deviceProperties"].get("name"), udid, device["identifier"]):
         print(udid)
