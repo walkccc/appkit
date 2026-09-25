@@ -18,7 +18,7 @@ set -euo pipefail
 #   appkit review screenshots  every card in one picture, changes framed
 #   appkit check metadata      every store's limits, every language's coverage
 #   appkit pull metadata       what the listing says right now, to compare
-#   appkit upload metadata     what's new, onto the store (--all: all of it)
+#   appkit upload metadata     what's new and promo, onto the store (--all: all of it)
 #   appkit upload screenshots  the store cards, onto the store
 #   appkit ship                the binary, onto the store
 #   appkit distribute          the binary, onto the internet — Mac, notarized

@@ -5,7 +5,7 @@ set -euo pipefail
 # Put something on a store. Three errands, kept apart because they cost very
 # different things and fail in different ways.
 #
-#   appkit upload metadata          what's new, every locale — plans, prints
+#   appkit upload metadata          what's new and promo, every locale — prints
 #                                   the diff, applies, no pause
 #   appkit upload metadata --all    …the whole listing instead: name, subtitle,
 #                                   description, keywords, promo, URLs

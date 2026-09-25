@@ -93,27 +93,21 @@ git diff -- store/metadata
 
 Compare the live listing with the tracked one. A field that differs and that this release did not set out to change was edited in App Store Connect — bring it back into the repo rather than paint over it, and say so. Limits and writing rules are `/appkit-metadata`'s.
 
-**Promotional text follows the release.** It is the line above the description and the one field Connect takes without a review, so each release decides whether it now leads with what this one added. Read the new release notes against the current `promotionalText` in `store/metadata/version/<language>.json`:
-
-- The release adds something a new user would want to know first → rewrite it, English first, then every language, within 170 characters. Lead with the new thing, then what the app is — a promo that names only the feature reads as a changelog to someone who has never opened the app.
-- A fix release, or the current text already covers it → leave it, and say so in the report.
-- Anything time-bound (a sale, an event) goes here and nowhere else, and comes back out the release after.
-
-A rewrite is what makes phase 5's upload `--all`, which is only safe because the diff above came back clean. On Play there is no such field.
+**Promotional text carries over.** Connect keeps it per version and starts a new one blank, so every upload re-sends the tracked `promotionalText` in `store/metadata/version/<language>.json` — what the last release carried. Rewrite it only when the user asks for a new one: English first, then every language, within 170 characters. Anything time-bound (a sale, an event) comes back out the release after. On Play there is no such field.
 
 ## 5. Upload
 
 Cheapest to redo first, the binary last:
 
 ```
-appkit upload metadata <v>                  # what's new; --all when the promo text or another field changed
+appkit upload metadata <v>                  # what's new and promo; --all only if another field changed
 appkit upload screenshots <v>
 scripts/upload-previews.sh --framed <v>     # the set the store takes — see below
 appkit ship --dry-run
 appkit ship
 ```
 
-- On the App Store, `upload metadata` sends the release notes and nothing else — a rewritten promo text stays local without `--all`, and nothing warns. `--all` sends the whole listing, and is the run that can paint over words edited in Connect — phase 4 is what makes it safe. Afterwards, `appkit pull metadata` and check `promotionalText` in `.asc/metadata-live` reads as the repo does.
+- On the App Store, `upload metadata` sends the release notes and the promotional text, and nothing else. `--all` sends the whole listing, and is the run that can paint over words edited in Connect — phase 4 is what makes it safe. Afterwards, `appkit pull metadata` and check `promotionalText` in `.asc/metadata-live` reads as the repo does.
 - **Which preview set goes up is the repo's call**, in its `AGENTS.md`. `--framed` is the bezel set; without it, the bare recording. They differ only by the bezel, and the wrong one uploads without complaint.
 - Every upload here replaces rather than adds, so each is safe to re-run. A preview upload that died partway is finished with only the languages it had left, `scripts/upload-previews.sh --framed <v> -- de fr`; a poster frame that did not take, with `--poster-only`.
 - Imagery persists **per version**, so a new version starts with none: cards and previews go up every release, changed or not. Unchanged ones cost minutes; a version without them costs a review cycle.
@@ -127,4 +121,4 @@ appkit ship
 
 Commit the composed cards and anything regenerated as one commit, in the shape the repo's log already uses for a release (`git log --oneline -5`). Stage explicit paths. No video is ever tracked — nothing under `.screenshots/` goes in. Push only when asked.
 
-Then report, a line a phase: what went up and to how many locales, whether the promo text changed, anything skipped and why, and whether the build is attached or sent.
+Then report, a line a phase: what went up and to how many locales, whether the promo text carried over or was rewritten, anything skipped and why, and whether the build is attached or sent.

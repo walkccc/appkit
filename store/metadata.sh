@@ -209,11 +209,14 @@ CHECK
 # may share a capture, and both listings still want a folder of their own.
 #
 # `scope` is what a release actually changes. `notes` — the default upload —
-# stages what's new and nothing else, because that is the only field that
-# differs release to release; a description or a set of keywords is reworded
-# deliberately, on its own day, and pushing all of it every time is how an edit
-# someone made in App Store Connect gets quietly overwritten by a tree nobody
-# re-pulled. `all` is that deliberate day.
+# stages what's new and the promotional text, and nothing else; a description or
+# a set of keywords is reworded deliberately, on its own day, and pushing all of
+# it every time is how an edit someone made in App Store Connect gets quietly
+# overwritten by a tree nobody re-pulled. `all` is that deliberate day.
+#
+# The promotional text rides along because Connect keeps it per version and
+# starts a new one blank: a notes-only push shipped every release with no promo
+# at all. The tracked copy is what the last release carried, so this repeats it.
 #
 # An omitted FIELD is a no-op to `asc metadata apply`, so a narrower stage
 # leaves the rest of the listing standing rather than blanking it. An omitted
@@ -242,7 +245,7 @@ shutil.rmtree(dst, ignore_errors=True)
 # the staged tree to see what a run is about to send. What lands there instead
 # is the live app-info, mirrored in afterwards: identical to Connect, so it
 # plans no change, and honest about why it is in a tree the push is not for.
-kinds = [("version", {"whatsNew"}, dst / "version" / version)]
+kinds = [("version", {"whatsNew", "promotionalText"}, dst / "version" / version)]
 if scope == "all":
     (dst / "app-info").mkdir(parents=True)
     kinds = [("app", APP_INFO, dst / "app-info"),
