@@ -1,6 +1,6 @@
 ---
 name: appkit-release
-description: Run a whole release in one pass — the version, the store screenshots, the preview videos recorded, framed and uploaded, the listing text, and the binary, on the App Store or Google Play. Use when cutting a release, or when regenerating or uploading any one of those pieces for a version.
+description: Run a whole release in one pass — the version, the store screenshots, the preview videos recorded and uploaded, the listing text, and the binary, on the App Store or Google Play. Use when cutting a release, or when regenerating or uploading any one of those pieces for a version.
 ---
 
 # Release
@@ -16,7 +16,6 @@ Run the phases in order, in one sitting, stopping only where a phase says to. Ea
 ## What invoking this authorises
 
 - **Every upload in it** — the cards, the preview videos, the release notes, and `appkit ship` attaching a build. Asking for a release is asking for these; do not stop to confirm each one.
-- **The Screeny credits** framing costs, 3 per capture language. Say the number when that phase starts.
 - **Not the send for review.** It is the one step with no undo. Only when the user has said so in this conversation; otherwise stop with the build attached and say it is ready to send.
 - **Builds follow the repo.** The default is never to build — no `xcodebuild`, no `gradlew`, and not through `appkit run`, `appkit ship` or `capture --build` either — and to ask for a DEBUG build in the IDE at phase 2. Where the repo's `AGENTS.md` authorises release builds, pass `--build` and run `appkit ship` yourself.
 
@@ -34,7 +33,6 @@ appkit check metadata
 - `git status` must be clean of anything generated. Anything regenerated ships with the release, not after it.
 - **The version must exist on App Store Connect before anything uploads to it.** Nothing in appkit creates it except `appkit ship`, which runs last — so when it is missing, `asc versions create --app <ascAppId> --version <v> --platform IOS`.
 - `check` must pass. A locale with no release note ships the previous release's words; writing them is `/appkit-metadata`, not this.
-- If the repo frames its previews, open Screeny with its MCP server on **now**. The framing phase checks for it, but an hour in.
 
 ## 1. Version
 
@@ -66,18 +64,18 @@ Only where the repo has `scripts/record-preview.sh`. The apps that make previews
 
 ```
 scripts/record-preview.sh     # → .screenshots/preview/<language>.mp4
-scripts/frame-preview.sh      # → .screenshots/preview/framed/<language>.mp4
 ```
+
+**No preview wears a device frame.** App Review refuses one under Guideline 2.3.4 — a preview is the screen recording and nothing around it, and only the cards may wear a device. `scripts/frame-preview.sh` makes a bezel set in `preview/framed/`, and it has no place in a release.
 
 - **After phase 2, never alongside it.** The recorder takes whatever was built last, and phase 2 just made it — DEBUG, the only configuration the reel exists in. It drives the same simulators, too.
 - Up to three takes a language, the smoothest kept: allow a minute or two each. Run it in the background and wait to be told it finished.
-- **Framing takes the screen.** Screeny renders in its on-screen editor and stalls when it is not frontmost, so nothing else comes forward until it is done.
 - One language that failed is re-run alone — `scripts/record-preview.sh de` — rather than the set.
 
 Look before uploading. Pull the poster frame (the timecode `scripts/upload-previews.sh` sets) out of two languages and read them:
 
 ```
-ffmpeg -v error -ss 0.33 -i .screenshots/preview/framed/en.mp4 -frames:v 1 <scratch>/en.png
+ffmpeg -v error -ss 0.33 -i .screenshots/preview/en.mp4 -frames:v 1 <scratch>/en.png
 ```
 
 It leads the gallery ahead of every card, so it is the one frame that has to be right on its own.
@@ -102,14 +100,15 @@ Cheapest to redo first, the binary last:
 ```
 appkit upload metadata <v>                  # what's new and promo; --all only if another field changed
 appkit upload screenshots <v>
-scripts/upload-previews.sh --framed <v>     # the set the store takes — see below
+scripts/upload-previews.sh <v>              # the bare recording, never --framed
 appkit ship --dry-run
 appkit ship
 ```
 
 - On the App Store, `upload metadata` sends the release notes and the promotional text, and nothing else. `--all` sends the whole listing, and is the run that can paint over words edited in Connect — phase 4 is what makes it safe. Afterwards, `appkit pull metadata` and check `promotionalText` in `.asc/metadata-live` reads as the repo does.
-- **Which preview set goes up is the repo's call**, in its `AGENTS.md`. `--framed` is the bezel set; without it, the bare recording. They differ only by the bezel, and the wrong one uploads without complaint.
-- Every upload here replaces rather than adds, so each is safe to re-run. A preview upload that died partway is finished with only the languages it had left, `scripts/upload-previews.sh --framed <v> -- de fr`; a poster frame that did not take, with `--poster-only`.
+- **`--framed` uploads the bezel set without complaint**, and review rejects it — the flag is never passed for the store.
+- **A preview that uploaded is not a preview that took.** Connect reports the asset COMPLETE on upload and can turn it FAILED a minute later with no reason given — it did for every 1242×2688 preview from 2026-09-27, whatever the content. Wait until each one carries a `videoUrl` before calling the phase done; the poster frame can only be set after that, so `--poster-only` is usually a second pass.
+- Every upload here replaces rather than adds, so each is safe to re-run. A preview upload that died partway is finished with only the languages it had left, `scripts/upload-previews.sh <v> -- de fr`; a poster frame that did not take, with `--poster-only`.
 - Imagery persists **per version**, so a new version starts with none: cards and previews go up every release, changed or not. Unchanged ones cost minutes; a version without them costs a review cycle.
 - `appkit ship` archives, uploads, waits for processing and attaches — on iOS through `asc publish appstore`, so the build number is resolved against Connect rather than guessed here and rejected as a duplicate _after_ the archive. It is the long one: background it. On Android the same verb puts the AAB on a track, inside one edit, so a run that dies halfway leaves the listing untouched.
 - With the user's say-so only: `appkit ship --submit-only` sends the attached build.
