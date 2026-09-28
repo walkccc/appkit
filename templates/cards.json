@@ -6,7 +6,7 @@
     "",
     "**1242x2688 is fixed.** Every iOS card here is that size and CI fails one",
     "that is not: one display size means one set to review. Captures come off an",
-    "iPhone 17 Pro (1206x2622) and are composed onto it.",
+    "iPhone 18 Pro (1206x2622) and are composed onto it.",
     "",
     "The full schema is in appkit's docs/CARDS.md. This is a real set trimmed to",
     "three cards, because a working example beats a blank schema."

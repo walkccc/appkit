@@ -4,7 +4,7 @@
 
 ## The shape
 
-**The card size is not a choice.** Every iOS card is 1242×2688 and CI fails one that is not — one display size means one set to review. Captures come off an iPhone 17 Pro (1206×2622) and are composed onto it.
+**The card size is not a choice.** Every iOS card is 1242×2688 and CI fails one that is not — one display size means one set to review. Captures come off an iPhone 18 Pro (1206×2622) and are composed onto it.
 
 The two numbers are independent: the phone is pinned in appkit and the card size is written here, and changing the phone does not change the card. What the card size _does_ decide is `ios.deviceTypes` in `appkit.json` — 1242×2688 is `IPHONE_65` — and `appkit doctor` checks every size in this file against what the manifest declares, because a mismatch uploads nothing and says it succeeded.
 

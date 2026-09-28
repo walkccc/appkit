@@ -6,7 +6,7 @@ set -euo pipefail
 #
 #   appkit run                            list the devices and stop
 #   appkit run --device "Jay's iPhone"    build, install, launch there
-#   appkit run --device "iPhone 17 Pro"   a simulator is a device too
+#   appkit run --device "iPhone 18 Pro"   a simulator is a device too
 #   appkit run --device "Apple Watch …"   and so is a watch: runs the watch app
 #   appkit run --skip-build               use whatever is already built
 #

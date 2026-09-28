@@ -46,7 +46,7 @@
 # and it is subtly wrong. It has already happened: three languages came off a
 # Pro Max because a worker simulator outlived a change of model, and the only
 # symptom anywhere was a re-shot warning that read as an animation.
-CAPTURE_DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
+CAPTURE_DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro"
 
 # Which runtime and model a capture runs on: read off any available simulator
 # of that model, on the newest runtime that has one — and if the machine has

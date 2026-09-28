@@ -30,7 +30,7 @@ a scene, which is the finding a per-file diff is worst at showing.
 
 If you are about to write a locale code, a scene name, or a store folder name into a script: stop. All three are rows in `appkit.json`, and every stage reads them from there.
 
-**The device is not one of them.** Every iOS capture is taken on an iPhone 17 Pro, which appkit finds or creates; a parallel worker of any other model is deleted and remade. There is nothing to configure and nothing to keep in step — and a run that ends with captures of two different sizes says so, loudly, because that is the failure that otherwise arrives disguised as an animation.
+**The device is not one of them.** Every iOS capture is taken on an iPhone 18 Pro, which appkit finds or creates; a parallel worker of any other model is deleted and remade. There is nothing to configure and nothing to keep in step — and a run that ends with captures of two different sizes says so, loudly, because that is the failure that otherwise arrives disguised as an animation.
 
 `appkit doctor` prints the model, so "which phone do these come off" is answerable here rather than by reading appkit. It is pinned there and not in `appkit.json` on purpose: one place to move means every repo moves at once, and a per-repo model is a per-repo way to drift silently.
 
