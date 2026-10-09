@@ -133,6 +133,8 @@ A `frame` with a `/` is resolved against **the repo**, like every other image in
 
 `iphone-18-pro-burgundy.png` comes from the same kit as the 17 Pro and its window is the same pixels, so a storyboard swaps one for the other by the filename alone.
 
+`iphone-duo-night-sky.png` and `iphone-duo-star-white.png` are iPhone Duo open and held wide, the same window in both: 2853×2007 to the pixel, the inner display's own capture, so a Duo screenshot goes in unscaled. `"screen": { "left": 2.109, "top": 3.316, "width": 95.514, "height": 93.741, "radiusX": 5.19, "radiusY": 7.24 }` — the corner a few pixels under the ~160 the glass measures, for the watch's reason: a square clip hides under the body, a round one shows the background. `iphone-duo-silhouette.png` is that body as a flat white mask, and nothing in the composer reads it yet.
+
 The Apple Watch model leaves the band off deliberately: a band is a second material, a second colour choice and a second asset, and the card is about what is on the screen.
 
 ### Fonts
