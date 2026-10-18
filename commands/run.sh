@@ -9,6 +9,7 @@ set -euo pipefail
 #   appkit run --device "iPhone 18 Pro"   a simulator is a device too
 #   appkit run --device "Apple Watch …"   and so is a watch: runs the watch app
 #   appkit run --skip-build               use whatever is already built
+#   appkit run --release --device "…"     the Release configuration, as shipped
 #
 # The device is always named. It is not read from appkit.json and there is no
 # default: "which device" is a question about the machine in front of you, not
@@ -26,6 +27,10 @@ set -euo pipefail
 # bundle id, all of them appkit.json's ios.watch. Nothing in this file says so:
 # the adapter answers with a third device kind and every step below follows it.
 #
+# --release overrides ios.configuration for this run only, so a capture keeps
+# the Debug build its screenshot mode needs while a phone can still get the
+# build the store gets — fixtures excluded, optimizer on, no debug menu.
+#
 # NOTE: this builds. Every app repo forbids an agent from running it.
 # ============================================================================
 
@@ -35,6 +40,7 @@ APPKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 device=""
 skip_build=false
+release=false
 platform=""
 
 # Parsed before the adapter is loaded, because --platform is what decides which
@@ -44,6 +50,7 @@ while (($#)); do
     --device) [[ $# -ge 2 ]] || die "--device needs a name"; device="$2"; shift 2 ;;
     --platform) [[ $# -ge 2 ]] || die "--platform needs a name"; platform="$2"; shift 2 ;;
     --skip-build) skip_build=true; shift ;;
+    --release) release=true; shift ;;
     help | -h | --help) appkit_usage "$0"; exit 0 ;;
     *) die "unknown argument: $1 (see: appkit help run)" ;;
   esac
@@ -64,6 +71,7 @@ if [[ -z "$platform" && "${#PLATFORMS[@]:-1}" -gt 1 ]]; then
 fi
 
 choose_platform "$platform"
+[[ "$release" == true ]] && CONFIGURATION=Release
 platform_use_device "$device"
 [[ "$skip_build" == true ]] || platform_build
 platform_locate_app
