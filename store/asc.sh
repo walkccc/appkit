@@ -236,22 +236,28 @@ asc_ship_build() {
 # so the archive and the upload happen again, for a build that is then left
 # hanging. `appkit ship --submit-only` is the cheap half, and lands here.
 
-# The newest review submission as "<id> <state>" — two empty fields when the app
-# has none.
+# The open review submission as "<id> <state>" — two empty fields when there is
+# none. Open, not newest: `asc review status` names the newest SUBMITTED one,
+# and a submission pulled back from review stays newest as COMPLETE while the
+# draft that replaces it has never been submitted. Read that way, a re-send
+# after a cancel reported the canceled run as "already sent".
 asc_submission() {
-  asc review status --app "$ASC_APP_ID" 2>/dev/null | python3 -c 'import json, sys
+  asc review submissions-list --app "$ASC_APP_ID" \
+    --state READY_FOR_REVIEW,WAITING_FOR_REVIEW,IN_REVIEW,UNRESOLVED_ISSUES \
+    2>/dev/null | python3 -c 'import json, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-s = d.get("latestSubmission") or {}
-print(s.get("id", ""), s.get("state", ""))'
+s = (d.get("data") or [{}])[0]
+print(s.get("id", ""), s.get("attributes", {}).get("state", ""))'
 }
 
 # Which app versions a submission actually holds — asked of the ITEMS rather
 # than of the app's current version record, because those two disagree exactly
 # when it matters: a draft left over from the last release sits under a version
-# record that has already moved on, and this send cannot be taken back.
+# record that has already moved on, and this send cannot be taken back. A
+# REMOVED item is what a cancel leaves behind, and holds nothing.
 asc_submission_versions() {
   asc review items-list --submission "$1" \
     --include appStoreVersion --fields state,appStoreVersion --output json 2>/dev/null |
@@ -260,20 +266,62 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
+held = {
+    ((r.get("relationships", {}).get("appStoreVersion") or {}).get("data") or {}).get("id")
+    for r in d.get("data") or []
+    if r.get("attributes", {}).get("state") != "REMOVED"
+}
 print(" ".join(sorted({
     r.get("attributes", {}).get("versionString", "")
     for r in d.get("included") or []
-    if r.get("type") == "appStoreVersions"
+    if r.get("type") == "appStoreVersions" and r.get("id") in held
 })))'
 }
 
+# The version record as "<id> <platform> <state>".
+asc_version() {
+  asc versions list --app "$ASC_APP_ID" --version "$1" 2>/dev/null | python3 -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+v = (d.get("data") or [{}])[0]
+a = v.get("attributes", {})
+print(v.get("id", ""), a.get("platform", ""), a.get("appVersionState") or a.get("appStoreState", ""))'
+}
+
 asc_send_for_review() {
-  local want="$1" dry="${2:-}" id state holds
+  local want="$1" dry="${2:-}" id state holds version_id platform version_state
   read -r id state < <(asc_submission)
-  [[ -n "$id" ]] ||
-    die "no review submission for $want — attach a build first: appkit ship"
+  # No open submission, or a draft with nothing in it, is where a send dies
+  # when Connect fails between creating the draft and adding the version — and
+  # where a cancel leaves a version that is about to go back. Both finish here
+  # rather than through another `appkit ship`, which would archive again.
+  if [[ -z "$id" ]] || [[ "$state" == READY_FOR_REVIEW && -z "$(asc_submission_versions "$id")" ]]; then
+    read -r version_id platform version_state < <(asc_version "$want")
+    [[ -n "$version_id" ]] || die "no App Store version $want — attach a build first: appkit ship"
+    case "$version_state" in
+      PREPARE_FOR_SUBMISSION | DEVELOPER_REJECTED | REJECTED | METADATA_REJECTED) ;;
+      *)
+        log "Already past the send — $want is $version_state"
+        return 0
+        ;;
+    esac
+    if [[ -n "$dry" ]]; then
+      log "Would add $want to a review submission and send it"
+      return 0
+    fi
+    if [[ -z "$id" ]]; then
+      id="$(asc review submissions-create --app "$ASC_APP_ID" --platform "$platform" |
+        python3 -c 'import json, sys; print(json.load(sys.stdin)["data"]["id"])')"
+      state=READY_FOR_REVIEW
+    fi
+    log "Adding $want to submission $id"
+    asc review items add --submission "$id" \
+      --item-type appStoreVersions --item-id "$version_id" >/dev/null
+  fi
   # Before the state, not just before the send: "already sent" is a claim about
-  # THIS version, and the newest submission is only evidence of it once it is
+  # THIS version, and the open submission is only evidence of it once it is
   # known to hold it. Read the other way round, a publish that died before it
   # attached anything would find last release's WAITING_FOR_REVIEW and report
   # the failed run as shipped.
@@ -291,7 +339,7 @@ asc_send_for_review() {
   log "Sending $want for review"
   asc review submissions-submit --id "$id" --confirm >/dev/null
   read -r id state < <(asc_submission)
-  [[ "$state" != READY_FOR_REVIEW ]] ||
-    die "submission $id is still a draft — Connect did not accept the send"
+  [[ -n "$state" && "$state" != READY_FOR_REVIEW ]] ||
+    die "submission ${id:-for $want} is still a draft — Connect did not accept the send"
   log "$APP_NAME $want sent for review ($state)"
 }
